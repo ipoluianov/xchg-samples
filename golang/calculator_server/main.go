@@ -1,7 +1,13 @@
 package main
 
-import "fmt"
+import (
+	"calculator_server/app"
+	"fmt"
+)
 
 func main() {
-	fmt.Println("Hello server")
+	fmt.Println("Calculator server started")
+	a := app.NewApp()
+	a.Start()
+	fmt.Println("Calculator server stopped")
 }
