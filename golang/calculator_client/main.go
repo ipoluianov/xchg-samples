@@ -1,7 +1,15 @@
 package main
 
-import "fmt"
+import (
+	"calculator_client/xchg"
+	"fmt"
+)
 
 func main() {
-	fmt.Println("Hello client")
+	fmt.Println("Calculator client started")
+
+	client := xchg.NewClient()
+	client.Send()
+
+	fmt.Println("Calculator client stopped")
 }

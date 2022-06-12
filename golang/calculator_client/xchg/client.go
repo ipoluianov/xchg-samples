@@ -1,12 +1,11 @@
 package xchg
 
 import (
-	"bytes"
+	"crypto/rsa"
 	"errors"
 	"fmt"
-	"io"
-	"io/ioutil"
-	"mime/multipart"
+	"github.com/ipoluianov/gomisc/crypt_tools"
+	"github.com/ipoluianov/gomisc/http_tools"
 	"net/http"
 	"sync"
 	"time"
@@ -20,17 +19,26 @@ type Client struct {
 	xchgIP            string
 	stopping          bool
 	IPsByAddress      map[string]string
-	OnReceived        func([]byte) ([]byte, error)
 
 	// AES Key
 	aesKey  []byte
 	counter uint64
 	lid     uint64
+
+	// Client
+	publicKey    *rsa.PublicKey
+	publicKeyBS  []byte
+	publicKey64  string
+	publicKeyHex string
 }
 
-func NewClient(localAddr string, onRcv func([]byte) ([]byte, error)) *Client {
+func NewClient(publicKey *rsa.PublicKey) *Client {
 	var c Client
-	c.OnReceived = onRcv
+
+	c.publicKey = publicKey
+	c.publicKeyBS = crypt_tools.RSAPublicKeyToDer(publicKey)
+	c.publicKey64 = crypt_tools.RSAPublicKeyToBase64(publicKey)
+	c.publicKeyHex = crypt_tools.RSAPublicKeyToHex(publicKey)
 
 	c.httpClientSend = &http.Client{}
 	c.httpClientSend.Timeout = 3000 * time.Millisecond
@@ -52,7 +60,7 @@ func (c *Client) findServerByAddress(addr string) (resultIp string) {
 	//fmt.Println("findServerByAddress", addr)
 	ips := c.getIPsByAddress(addr)
 	for _, ip := range ips {
-		code, _, err := c.Request(c.httpClientPing, "http://"+ip+":8987", map[string][]byte{"f": []byte("p"), "a": []byte(addr)})
+		code, _, err := http_tools.Request(c.httpClientPing, "http://"+ip+":8987", map[string][]byte{"f": []byte("p"), "a": []byte(addr)})
 		if err != nil {
 			continue
 		}
@@ -66,13 +74,12 @@ func (c *Client) findServerByAddress(addr string) (resultIp string) {
 	return
 }
 
-func (c *Client) Send(addr string, data []byte) (err error) {
-	//fmt.Println("Send to", addr, "data_len:", len(data))
+func (c *Client) Call(data []byte) (err error) {
 	var ok bool
 	var code int
 	currentIP := ""
 	c.mtx.Lock()
-	currentIP, ok = c.IPsByAddress[addr]
+	currentIP, ok = c.IPsByAddress[c.publicKeyHex]
 	c.mtx.Unlock()
 
 	needToResend := false
@@ -80,12 +87,12 @@ func (c *Client) Send(addr string, data []byte) (err error) {
 	if ok && currentIP != "" {
 		var resp []byte
 		//fmt.Println("Send(1): found ip:", currentIP)
-		code, resp, err = c.Request(c.httpClientSend, "http://"+currentIP+":8987", map[string][]byte{"f": []byte("w"), "a": []byte(addr), "d": data})
+		code, resp, err = http_tools.Request(c.httpClientSend, "http://"+currentIP+":8987", map[string][]byte{"f": []byte("w"), "a": []byte(addr), "d": data})
 		if err != nil || code != 200 {
 			fmt.Println("Send(1) error", err, code, string(resp))
 			needToResend = true
 			c.mtx.Lock()
-			c.IPsByAddress[addr] = ""
+			c.IPsByAddress[c.publicKeyHex] = ""
 			currentIP = ""
 			c.mtx.Unlock()
 		} else {
@@ -97,9 +104,9 @@ func (c *Client) Send(addr string, data []byte) (err error) {
 
 	if needToResend {
 		fmt.Println("resend")
-		currentIP = c.findServerByAddress(addr)
+		currentIP = c.findServerByAddress(c.publicKeyHex)
 		if currentIP != "" {
-			code, _, err = c.Request(c.httpClientSend, "http://"+currentIP+":8987", map[string][]byte{"f": []byte("w"), "a": []byte(addr), "d": data})
+			code, _, err = http_tools.Request(c.httpClientSend, "http://"+currentIP+":8987", map[string][]byte{"f": []byte("w"), "a": []byte(addr), "d": data})
 			if code == 200 && err == nil {
 				c.mtx.Lock()
 				c.IPsByAddress[addr] = currentIP
@@ -111,47 +118,4 @@ func (c *Client) Send(addr string, data []byte) (err error) {
 	}
 
 	return
-}
-
-func (c *Client) Request(httpClient *http.Client, url string, parameters map[string][]byte) (code int, data []byte, err error) {
-
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	for key, value := range parameters {
-		var fw io.Writer
-		fw, err = writer.CreateFormField(key)
-		if err != nil {
-			return
-		}
-		_, err = fw.Write(value)
-		if err != nil {
-			return
-		}
-	}
-	err = writer.Close()
-	if err != nil {
-		return
-	}
-	var response *http.Response
-	response, err = c.Post(httpClient, url, writer.FormDataContentType(), &body)
-	if err != nil {
-		return
-	}
-	code = response.StatusCode
-	data, err = ioutil.ReadAll(response.Body)
-	if err != nil {
-		_ = response.Body.Close()
-		return
-	}
-	_ = response.Body.Close()
-	return
-}
-
-func (c *Client) Post(httpClient *http.Client, url, contentType string, body io.Reader) (resp *http.Response, err error) {
-	req, err := http.NewRequest("POST", url, body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", contentType)
-	return httpClient.Do(req)
 }
