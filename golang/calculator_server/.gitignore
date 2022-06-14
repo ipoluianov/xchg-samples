@@ -4,4 +4,3 @@ bin/
 /%SystemDrive%/
 *.pem
 __debug_bin
-**/.*
