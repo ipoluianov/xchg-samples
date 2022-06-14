@@ -6,11 +6,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/ipoluianov/gomisc/crypt_tools"
-	"github.com/ipoluianov/gomisc/http_tools"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/ipoluianov/gomisc/crypt_tools"
+	"github.com/ipoluianov/gomisc/http_tools"
 )
 
 type Client struct {
@@ -89,6 +90,8 @@ func (c *Client) regularCall(data []byte) (resp []byte, err error) {
 	binary.LittleEndian.PutUint64(frame[1:], c.lid)
 	frame = append(frame, data...)
 	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+c.remoteServerHostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
+	respBS, _ := base64.StdEncoding.DecodeString(string(resp))
+	fmt.Println("CALL RESULT", string(respBS))
 	if err != nil {
 		return
 	}

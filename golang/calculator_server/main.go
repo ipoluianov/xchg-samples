@@ -4,9 +4,10 @@ import (
 	"calculator_server/xchg"
 	"crypto/rsa"
 	"fmt"
-	"github.com/ipoluianov/gomisc/crypt_tools"
 	"io/ioutil"
 	"os"
+
+	"github.com/ipoluianov/gomisc/crypt_tools"
 )
 
 func main() {
@@ -43,7 +44,7 @@ func main() {
 	}
 
 	xchgServer := xchg.NewServer(privateKey, func(bytes []byte) ([]byte, error) {
-		return nil, nil
+		return []byte("DATA FROM SERVER"), nil
 	})
 
 	xchgServer.Start()

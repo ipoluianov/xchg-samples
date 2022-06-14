@@ -2,3 +2,6 @@
 bin/
 *.exe
 /%SystemDrive%/
+*.pem
+__debug_bin
+**/.*
