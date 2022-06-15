@@ -1,6 +1,7 @@
 package xchg
 
 import (
+	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/binary"
@@ -23,6 +24,8 @@ type Client struct {
 	stopping     bool
 	IPsByAddress map[string]string
 
+	authData []byte
+
 	// AES Key
 	aesKey  []byte
 	counter uint64
@@ -38,7 +41,7 @@ type Client struct {
 	lid                   uint64
 }
 
-func NewClient(publicKey *rsa.PublicKey) *Client {
+func NewClient(publicKey *rsa.PublicKey, authString string) *Client {
 	var c Client
 
 	c.publicKey = publicKey
@@ -102,11 +105,43 @@ func (c *Client) regularCall(data []byte) (resp []byte, err error) {
 	return
 }
 
+func (c *Client) auth() (err error) {
+	var code int
+	var resp []byte
+	frame := make([]byte, 9)
+	frame[0] = 0x04
+	binary.LittleEndian.PutUint64(frame[1:], c.lid)
+
+	dataForEncrypt := make([]byte, 5)
+	dataForEncrypt[0] = 1
+	binary.LittleEndian.PutUint32(dataForEncrypt[1:], uint32(len(c.authData)))
+	dataForEncrypt = append(dataForEncrypt, c.aesKey...)
+
+	encryptedAuthData, err := rsa.EncryptPKCS1v15(rand.Reader, c.publicKey, dataForEncrypt)
+
+	frame = append(frame, encryptedAuthData...)
+	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+c.remoteServerHostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
+	respBS, _ := base64.StdEncoding.DecodeString(string(resp))
+	fmt.Println("CALL RESULT", string(respBS))
+	if err != nil {
+		return
+	}
+	if code != 200 {
+		err = errors.New("error code=" + fmt.Sprint(code))
+		return
+	}
+
+	c.aesKey = respBS
+
+	return
+}
+
 func (c *Client) Call(data []byte) (resp []byte, err error) {
 	fmt.Println("Call")
 	if len(c.remoteServerHostingIP) == 0 {
 		fmt.Println("Call try ping")
 		c.ping()
+		c.auth()
 	}
 
 	if len(c.remoteServerHostingIP) == 0 {
