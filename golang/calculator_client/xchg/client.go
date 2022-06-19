@@ -113,42 +113,55 @@ func (c *Client) regularCall(frameType byte, data []byte) (resp []byte, err erro
 }
 
 func (c *Client) auth() (err error) {
-	fmt.Println("auth")
 	var code int
 	var resp []byte
+
 	frame := make([]byte, 9)
-	frame[0] = 0x04
-	binary.LittleEndian.PutUint64(frame[1:], c.lid)
+	frame[0] = 0x04                                 // xchg - to server
+	binary.LittleEndian.PutUint64(frame[1:], c.lid) //  LID
 
-	dataForEncrypt := make([]byte, 32+4)
-	dataForEncrypt[0] = 1
-	copy(dataForEncrypt, c.aesKey)
+	// [AES(32)][AUTH_LEN(4)][AUTH_DATA(N)]
+	authFrame := make([]byte, 32+4)
+	copy(authFrame, c.aesKey)                                  // set AES Key
+	authDataLen := uint32(len(c.authData))                     // Getting AUTH_LEN
+	binary.LittleEndian.PutUint32(authFrame[32:], authDataLen) // AUTH_LEN
+	authFrame = append(authFrame, c.authData...)               // AUTH_DATA
 
-	binary.LittleEndian.PutUint32(dataForEncrypt[32:], uint32(len(c.authData)))
-	dataForEncrypt = append(dataForEncrypt, c.authData...)
-
-	fmt.Println("for enc", dataForEncrypt)
-
-	encryptedAuthData, err := rsa.EncryptPKCS1v15(rand.Reader, c.publicKey, dataForEncrypt)
+	// Encrypt with public key (address)
+	encryptedAuthData, err := rsa.EncryptPKCS1v15(rand.Reader, c.publicKey, authFrame)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	frame = append(frame, 0x01)
-	frame = append(frame, encryptedAuthData...)
-	fmt.Println("send:", encryptedAuthData)
+	// Prepare frame
+	frame = append(frame, 0x01)                 // Type: auth frame
+	frame = append(frame, encryptedAuthData...) // Data to server
+
+	// Request
 	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+c.remoteServerHostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
-	respBS, _ := base64.StdEncoding.DecodeString(string(resp))
+	if err != nil {
+		return
+	}
 
-	var bsAuthResult []byte
-	bsAuthResult, err = crypt_tools.DecryptAESGCM(respBS, c.aesKey)
-
-	fmt.Println("CALL auth RESULT", string(bsAuthResult))
+	// Base64 -> []byte
+	respBS, err := base64.StdEncoding.DecodeString(string(resp))
 	if err != nil {
 		return
 	}
 	if code != 200 {
-		err = errors.New("error code=" + fmt.Sprint(code))
+		err = errors.New("http error code = " + fmt.Sprint(code))
+		return
+	}
+
+	// decrypt auth result by AES key
+	var bsAuthResult []byte
+	bsAuthResult, err = crypt_tools.DecryptAESGCM(respBS, c.aesKey)
+	if err != nil {
+		return
+	}
+
+	fmt.Println("CALL auth RESULT", string(bsAuthResult))
+	if err != nil {
 		return
 	}
 
