@@ -10,12 +10,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/ipoluianov/gomisc/crypt_tools"
-	"github.com/ipoluianov/gomisc/http_tools"
 	"io"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/ipoluianov/gomisc/crypt_tools"
+	"github.com/ipoluianov/gomisc/http_tools"
 )
 
 type Server struct {
@@ -282,12 +283,53 @@ func (c *Server) thRcv() {
 				}
 				transactionId := binary.LittleEndian.Uint64(data[0:])
 				data = data[8:]
-				fmt.Println("Received request", transactionId, string(data))
-				response, err := c.OnReceived(data)
-				if err != nil {
-					continue
+				frameType := data[0]
+				data = data[1:]
+
+				response := make([]byte, 0)
+
+				if frameType == 0x00 {
+					fmt.Println("Received request", transactionId, string(data))
+					response, err = c.OnReceived(data)
+					if err != nil {
+						continue
+					}
+					fmt.Println("RESPONSE: ", string(response))
 				}
-				fmt.Println("RESPONSE: ", string(response))
+
+				if frameType == 0x01 {
+					var decryptedData []byte
+					decryptedData, err = rsa.DecryptPKCS1v15(rand.Reader, c.privateKey, data)
+					if err != nil {
+						continue
+					}
+
+					if len(decryptedData) < 32+4 {
+						continue
+					}
+
+					authDataLenU32 := binary.LittleEndian.Uint32(decryptedData[32:])
+					authDataLen := int(authDataLenU32)
+					if len(decryptedData) != 32+4+authDataLen {
+						continue
+					}
+
+					aesKey := make([]byte, 32)
+					copy(aesKey, decryptedData)
+					authData := make([]byte, authDataLen)
+					copy(authData, decryptedData[32+4:])
+
+					fmt.Println("aeskey:", aesKey)
+					fmt.Println("authData", authData)
+
+					response, err = crypt_tools.EncryptAESGCM([]byte("§HELLO§"), aesKey)
+					if err != nil {
+						continue
+					}
+
+					fmt.Println("Received request -------", transactionId, data)
+					fmt.Println("RESPONSE: ", response)
+				}
 
 				{
 					putRequestBS := make([]byte, 9)

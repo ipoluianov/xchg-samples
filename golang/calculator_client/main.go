@@ -4,8 +4,9 @@ import (
 	"calculator_client/xchg"
 	"crypto/rsa"
 	"fmt"
-	"github.com/ipoluianov/gomisc/crypt_tools"
 	"io/ioutil"
+
+	"github.com/ipoluianov/gomisc/crypt_tools"
 )
 
 func main() {
@@ -28,9 +29,9 @@ func main() {
 		panic(err)
 	}
 
-	client := xchg.NewClient(publicKey)
+	client := xchg.NewClient(publicKey, "pass")
 	client.Call([]byte("HELLO"))
-	client.Call([]byte("HELLO123"))
+	//client.Call([]byte("HELLO123"))
 
 	fmt.Println("Calculator client stopped")
 }

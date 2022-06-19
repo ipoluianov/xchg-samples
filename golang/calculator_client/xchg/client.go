@@ -3,6 +3,7 @@ package xchg
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -57,6 +58,11 @@ func NewClient(publicKey *rsa.PublicKey, authString string) *Client {
 
 	c.IPsByAddress = make(map[string]string)
 
+	c.authData = []byte(authString)
+
+	addrSecretCalculated := sha256.Sum256([]byte("123"))
+	c.aesKey = addrSecretCalculated[:]
+
 	c.Reset()
 
 	return &c
@@ -86,11 +92,12 @@ func (c *Client) ping() {
 	fmt.Println("ping exit ", code, err)
 }
 
-func (c *Client) regularCall(data []byte) (resp []byte, err error) {
+func (c *Client) regularCall(frameType byte, data []byte) (resp []byte, err error) {
 	var code int
 	frame := make([]byte, 9)
 	frame[0] = 0x04
 	binary.LittleEndian.PutUint64(frame[1:], c.lid)
+	frame = append(frame, frameType)
 	frame = append(frame, data...)
 	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+c.remoteServerHostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
 	respBS, _ := base64.StdEncoding.DecodeString(string(resp))
@@ -106,23 +113,37 @@ func (c *Client) regularCall(data []byte) (resp []byte, err error) {
 }
 
 func (c *Client) auth() (err error) {
+	fmt.Println("auth")
 	var code int
 	var resp []byte
 	frame := make([]byte, 9)
 	frame[0] = 0x04
 	binary.LittleEndian.PutUint64(frame[1:], c.lid)
 
-	dataForEncrypt := make([]byte, 5)
+	dataForEncrypt := make([]byte, 32+4)
 	dataForEncrypt[0] = 1
-	binary.LittleEndian.PutUint32(dataForEncrypt[1:], uint32(len(c.authData)))
-	dataForEncrypt = append(dataForEncrypt, c.aesKey...)
+	copy(dataForEncrypt, c.aesKey)
+
+	binary.LittleEndian.PutUint32(dataForEncrypt[32:], uint32(len(c.authData)))
+	dataForEncrypt = append(dataForEncrypt, c.authData...)
+
+	fmt.Println("for enc", dataForEncrypt)
 
 	encryptedAuthData, err := rsa.EncryptPKCS1v15(rand.Reader, c.publicKey, dataForEncrypt)
+	if err != nil {
+		panic(err)
+	}
 
+	frame = append(frame, 0x01)
 	frame = append(frame, encryptedAuthData...)
+	fmt.Println("send:", encryptedAuthData)
 	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+c.remoteServerHostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
 	respBS, _ := base64.StdEncoding.DecodeString(string(resp))
-	fmt.Println("CALL RESULT", string(respBS))
+
+	var bsAuthResult []byte
+	bsAuthResult, err = crypt_tools.DecryptAESGCM(respBS, c.aesKey)
+
+	fmt.Println("CALL auth RESULT", string(bsAuthResult))
 	if err != nil {
 		return
 	}
@@ -137,21 +158,21 @@ func (c *Client) auth() (err error) {
 }
 
 func (c *Client) Call(data []byte) (resp []byte, err error) {
-	fmt.Println("Call")
+	//fmt.Println("Call")
 	if len(c.remoteServerHostingIP) == 0 {
-		fmt.Println("Call try ping")
+		//fmt.Println("Call try ping")
 		c.ping()
 		c.auth()
 	}
 
 	if len(c.remoteServerHostingIP) == 0 {
-		fmt.Println("Call try ping - no")
+		//fmt.Println("Call try ping - no")
 		err = errors.New("no route to node")
 		return
 	}
 
-	fmt.Println("Call executing")
-	resp, err = c.regularCall(data)
-	fmt.Println("Call executed")
+	//fmt.Println("Call executing")
+	resp, err = c.regularCall(0, data)
+	//fmt.Println("Call executed")
 	return
 }

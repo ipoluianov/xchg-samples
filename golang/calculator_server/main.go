@@ -44,7 +44,7 @@ func main() {
 	}
 
 	xchgServer := xchg.NewServer(privateKey, func(bytes []byte) ([]byte, error) {
-		return []byte("DATA FROM SERVER"), nil
+		return []byte("DATA FROM SERVER123"), nil
 	})
 
 	xchgServer.Start()
