@@ -40,6 +40,7 @@ type Client struct {
 	// State
 	remoteServerHostingIP string
 	lid                   uint64
+	sessionId             uint64
 }
 
 func NewClient(publicKey *rsa.PublicKey, authString string) *Client {
@@ -71,37 +72,38 @@ func NewClient(publicKey *rsa.PublicKey, authString string) *Client {
 func (c *Client) Reset() {
 	c.remoteServerHostingIP = ""
 	c.lid = 0
+	c.sessionId = 0
 }
 
 func (c *Client) getIPsByAddress(_ string) []string {
 	return []string{"127.0.0.1"}
 }
 
-func (c *Client) ping() {
-	fmt.Println("ping")
+func (c *Client) ping() (err error) {
 	frame := make([]byte, 1)
 	frame[0] = 0x05
 	frame = append(frame, c.publicKeyBS...)
-	code, resp, err := http_tools.Request(c.httpClientSend, "http://"+"127.0.0.1"+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
+	var code int
+	var resp []byte
+	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+"127.0.0.1"+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
 	if code == 200 && err == nil {
 		c.remoteServerHostingIP = "127.0.0.1"
 		respBS, _ := base64.StdEncoding.DecodeString(string(resp))
 		fmt.Println("respBS", respBS)
 		c.lid = binary.LittleEndian.Uint64(respBS)
 	}
-	fmt.Println("ping exit ", code, err)
+	return
 }
 
-func (c *Client) regularCall(frameType byte, data []byte) (resp []byte, err error) {
+func (c *Client) regularCall(data []byte) (resp []byte, err error) {
 	var code int
-	frame := make([]byte, 9)
+	frame := make([]byte, 1+8+8)
 	frame[0] = 0x04
 	binary.LittleEndian.PutUint64(frame[1:], c.lid)
-	frame = append(frame, frameType)
+	binary.LittleEndian.PutUint64(frame[9:], c.sessionId)
 	frame = append(frame, data...)
 	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+c.remoteServerHostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
 	respBS, _ := base64.StdEncoding.DecodeString(string(resp))
-	fmt.Println("CALL RESULT", string(respBS))
 	if err != nil {
 		return
 	}
@@ -109,6 +111,7 @@ func (c *Client) regularCall(frameType byte, data []byte) (resp []byte, err erro
 		err = errors.New("error code=" + fmt.Sprint(code))
 		return
 	}
+	resp = respBS
 	return
 }
 
@@ -116,9 +119,10 @@ func (c *Client) auth() (err error) {
 	var code int
 	var resp []byte
 
-	frame := make([]byte, 9)
-	frame[0] = 0x04                                 // xchg - to server
-	binary.LittleEndian.PutUint64(frame[1:], c.lid) //  LID
+	frame := make([]byte, 1+8+8)
+	frame[0] = 0x04                                              // xchg - to server
+	binary.LittleEndian.PutUint64(frame[1:], c.lid)              //  LID
+	binary.LittleEndian.PutUint64(frame[9:], 0xFFFFFFFFFFFFFFFF) //  0xFFFFFFFFFFFFFFFF - unknown session
 
 	// [AES(32)][AUTH_LEN(4)][AUTH_DATA(N)]
 	authFrame := make([]byte, 32+4)
@@ -134,7 +138,6 @@ func (c *Client) auth() (err error) {
 	}
 
 	// Prepare frame
-	frame = append(frame, 0x01)                 // Type: auth frame
 	frame = append(frame, encryptedAuthData...) // Data to server
 
 	// Request
@@ -142,6 +145,8 @@ func (c *Client) auth() (err error) {
 	if err != nil {
 		return
 	}
+
+	fmt.Println("rrr", string(resp))
 
 	// Base64 -> []byte
 	respBS, err := base64.StdEncoding.DecodeString(string(resp))
@@ -160,22 +165,30 @@ func (c *Client) auth() (err error) {
 		return
 	}
 
-	fmt.Println("CALL auth RESULT", string(bsAuthResult))
+	if len(bsAuthResult) != 8 {
+		err = errors.New("wrong auth response")
+	}
+
+	c.sessionId = binary.LittleEndian.Uint64(bsAuthResult)
+	fmt.Println("CALL auth SessionId=", c.sessionId)
 	if err != nil {
 		return
 	}
-
-	c.aesKey = respBS
-
 	return
 }
 
 func (c *Client) Call(data []byte) (resp []byte, err error) {
-	//fmt.Println("Call")
 	if len(c.remoteServerHostingIP) == 0 {
-		//fmt.Println("Call try ping")
-		c.ping()
-		c.auth()
+		err = c.ping()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		err = c.auth()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
 	}
 
 	if len(c.remoteServerHostingIP) == 0 {
@@ -185,7 +198,7 @@ func (c *Client) Call(data []byte) (resp []byte, err error) {
 	}
 
 	//fmt.Println("Call executing")
-	resp, err = c.regularCall(0, data)
+	resp, err = c.regularCall(data)
 	//fmt.Println("Call executed")
 	return
 }

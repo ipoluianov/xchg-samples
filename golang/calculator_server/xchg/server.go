@@ -39,12 +39,21 @@ type Server struct {
 	aesKey            []byte
 	counter           uint64
 	lid               uint64
+
+	sessions      map[uint64]*Session
+	nextSessionId uint64
+}
+
+type Session struct {
+	aesKey []byte
 }
 
 func NewServer(privateKey *rsa.PrivateKey, onRcv func([]byte) ([]byte, error)) *Server {
 	var c Server
 	c.OnReceived = onRcv
 	c.privateKey = privateKey
+
+	c.sessions = make(map[uint64]*Session)
 
 	// Prepare keys
 	c.privateKeyBS = crypt_tools.RSAPrivateKeyToDer(privateKey)
@@ -283,21 +292,19 @@ func (c *Server) thRcv() {
 				}
 				transactionId := binary.LittleEndian.Uint64(data[0:])
 				data = data[8:]
-				frameType := data[0]
-				data = data[1:]
+				sessionId := binary.LittleEndian.Uint64(data)
+				data = data[8:]
 
 				response := make([]byte, 0)
 
-				if frameType == 0x00 {
+				if sessionId != 0xFFFFFFFFFFFFFFFF {
 					fmt.Println("Received request", transactionId, string(data))
 					response, err = c.OnReceived(data)
 					if err != nil {
 						continue
 					}
 					fmt.Println("RESPONSE: ", string(response))
-				}
-
-				if frameType == 0x01 {
+				} else {
 					var decryptedData []byte
 					decryptedData, err = rsa.DecryptPKCS1v15(rand.Reader, c.privateKey, data)
 					if err != nil {
@@ -322,7 +329,14 @@ func (c *Server) thRcv() {
 					fmt.Println("aeskey:", aesKey)
 					fmt.Println("authData", authData)
 
-					response, err = crypt_tools.EncryptAESGCM([]byte("§HELLO§"), aesKey)
+					c.nextSessionId++
+					var s Session
+					s.aesKey = aesKey
+					c.sessions[c.nextSessionId] = &s
+					respSessionId := make([]byte, 8)
+					binary.LittleEndian.PutUint64(respSessionId, c.nextSessionId)
+
+					response, err = crypt_tools.EncryptAESGCM(respSessionId, aesKey)
 					if err != nil {
 						continue
 					}

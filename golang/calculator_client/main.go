@@ -30,8 +30,13 @@ func main() {
 	}
 
 	client := xchg.NewClient(publicKey, "pass")
-	client.Call([]byte("HELLO"))
-	//client.Call([]byte("HELLO123"))
+	var res []byte
+	res, err = client.Call([]byte("HELLO"))
+	fmt.Println(string(res))
+	res, err = client.Call([]byte("HELLO"))
+	fmt.Println(string(res))
+	res, err = client.Call([]byte("HELLO"))
+	fmt.Println(string(res))
 
 	fmt.Println("Calculator client stopped")
 }
