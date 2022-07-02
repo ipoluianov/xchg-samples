@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"fmt"
 	"io/ioutil"
+	"time"
 
 	"github.com/ipoluianov/gomisc/crypt_tools"
 )
@@ -29,14 +30,20 @@ func main() {
 		panic(err)
 	}
 
-	client := xchg.NewClient(publicKey, "pass")
+	client := xchg.NewClient(publicKey, "main password")
 	var res []byte
-	res, err = client.Call([]byte("HELLO"))
-	fmt.Println(string(res))
-	res, err = client.Call([]byte("HELLO"))
-	fmt.Println(string(res))
-	res, err = client.Call([]byte("HELLO"))
-	fmt.Println(string(res))
+
+	for i := 0; i < 3; i++ {
+		res, err = client.Call([]byte("HELLO1"))
+		fmt.Println(string(res), err)
+	}
+
+	time.Sleep(10 * time.Second)
+
+	for i := 0; i < 3; i++ {
+		res, err = client.Call([]byte("HELLO2"))
+		fmt.Println(string(res), err)
+	}
 
 	fmt.Println("Calculator client stopped")
 }

@@ -28,8 +28,9 @@ type Client struct {
 	authData []byte
 
 	// AES Key
-	aesKey  []byte
-	counter uint64
+	authAESKey []byte
+	aesKey     []byte
+	counter    uint64
 
 	// Client
 	publicKey    *rsa.PublicKey
@@ -61,8 +62,12 @@ func NewClient(publicKey *rsa.PublicKey, authString string) *Client {
 
 	c.authData = []byte(authString)
 
-	addrSecretCalculated := sha256.Sum256([]byte("123"))
-	c.aesKey = addrSecretCalculated[:]
+	randomBytes := make([]byte, 256)
+	_, err := rand.Read(randomBytes)
+	if err == nil {
+		addrSecretCalculated := sha256.Sum256(randomBytes)
+		c.authAESKey = addrSecretCalculated[:]
+	}
 
 	c.Reset()
 
@@ -72,7 +77,7 @@ func NewClient(publicKey *rsa.PublicKey, authString string) *Client {
 func (c *Client) Reset() {
 	c.remoteServerHostingIP = ""
 	c.lid = 0
-	c.sessionId = 0
+	c.sessionId = 0xFFFFFFFFFFFFFFFF
 }
 
 func (c *Client) getIPsByAddress(_ string) []string {
@@ -101,7 +106,9 @@ func (c *Client) regularCall(data []byte) (resp []byte, err error) {
 	frame[0] = 0x04
 	binary.LittleEndian.PutUint64(frame[1:], c.lid)
 	binary.LittleEndian.PutUint64(frame[9:], c.sessionId)
-	frame = append(frame, data...)
+	var encryptedData []byte
+	encryptedData, err = crypt_tools.EncryptAESGCM(data, c.aesKey)
+	frame = append(frame, encryptedData...)
 	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+c.remoteServerHostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
 	respBS, _ := base64.StdEncoding.DecodeString(string(resp))
 	if err != nil {
@@ -111,13 +118,21 @@ func (c *Client) regularCall(data []byte) (resp []byte, err error) {
 		err = errors.New("error code=" + fmt.Sprint(code))
 		return
 	}
-	resp = respBS
+	resp, err = crypt_tools.DecryptAESGCM(respBS, c.aesKey)
+	if err != nil {
+		c.Reset()
+	}
 	return
 }
 
 func (c *Client) auth() (err error) {
 	var code int
 	var resp []byte
+
+	if len(c.authAESKey) != 32 {
+		err = errors.New("no auth AES key")
+		return
+	}
 
 	frame := make([]byte, 1+8+8)
 	frame[0] = 0x04                                              // xchg - to server
@@ -126,7 +141,7 @@ func (c *Client) auth() (err error) {
 
 	// [AES(32)][AUTH_LEN(4)][AUTH_DATA(N)]
 	authFrame := make([]byte, 32+4)
-	copy(authFrame, c.aesKey)                                  // set AES Key
+	copy(authFrame, c.authAESKey)                              // set AES Key
 	authDataLen := uint32(len(c.authData))                     // Getting AUTH_LEN
 	binary.LittleEndian.PutUint32(authFrame[32:], authDataLen) // AUTH_LEN
 	authFrame = append(authFrame, c.authData...)               // AUTH_DATA
@@ -160,16 +175,22 @@ func (c *Client) auth() (err error) {
 
 	// decrypt auth result by AES key
 	var bsAuthResult []byte
-	bsAuthResult, err = crypt_tools.DecryptAESGCM(respBS, c.aesKey)
+	bsAuthResult, err = crypt_tools.DecryptAESGCM(respBS, c.authAESKey)
 	if err != nil {
 		return
 	}
 
-	if len(bsAuthResult) != 8 {
+	if len(bsAuthResult) != 8+32 {
 		err = errors.New("wrong auth response")
 	}
 
 	c.sessionId = binary.LittleEndian.Uint64(bsAuthResult)
+	c.aesKey = make([]byte, 32)
+	copy(c.aesKey, bsAuthResult[8:])
+
+	if c.sessionId == 0xFFFFFFFFFFFFFFFF {
+		err = errors.New("wrong auth - error")
+	}
 	fmt.Println("CALL auth SessionId=", c.sessionId)
 	if err != nil {
 		return
@@ -181,12 +202,14 @@ func (c *Client) Call(data []byte) (resp []byte, err error) {
 	if len(c.remoteServerHostingIP) == 0 {
 		err = c.ping()
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("PING ERR", err)
+			c.remoteServerHostingIP = ""
 			return
 		}
 		err = c.auth()
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("AUTH ERR", err)
+			c.remoteServerHostingIP = ""
 			return
 		}
 	}
@@ -197,8 +220,8 @@ func (c *Client) Call(data []byte) (resp []byte, err error) {
 		return
 	}
 
-	//fmt.Println("Call executing")
+	fmt.Println("Call executing")
 	resp, err = c.regularCall(data)
-	//fmt.Println("Call executed")
+	fmt.Println("Call executed")
 	return
 }
