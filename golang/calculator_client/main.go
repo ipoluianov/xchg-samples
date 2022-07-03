@@ -5,10 +5,16 @@ import (
 	"crypto/rsa"
 	"fmt"
 	"io/ioutil"
+	"sync"
 	"time"
 
 	"github.com/ipoluianov/gomisc/crypt_tools"
 )
+
+var mtx sync.Mutex
+var callCounter int
+var lastStatCounter int
+var lastStatDT time.Time
 
 func main() {
 	var err error
@@ -30,20 +36,47 @@ func main() {
 		panic(err)
 	}
 
-	client := xchg.NewClient(publicKey, "main password")
-	var res []byte
-
-	for i := 0; i < 3; i++ {
-		res, err = client.Call([]byte("HELLO1"))
-		fmt.Println(string(res), err)
+	var fn = func(th string) {
+		client := xchg.NewClient(publicKey, "main password")
+		var res []byte
+		for i := 0; i < 10000; i++ {
+			//dt1 := time.Now()
+			res, err = client.Call([]byte("HEL23749827349872947293742974298749283733333333333333888888888888479283984729847298472987492874982739482739487239874928749287349827349872947239874923874982379823743894798LO_" + th))
+			_ = res
+			//dt2 := time.Now()
+			//fmt.Println(string(res), dt2.Sub(dt1).Milliseconds(), err)
+			mtx.Lock()
+			callCounter++
+			mtx.Unlock()
+			//time.Sleep(100 * time.Millisecond)
+		}
 	}
 
-	time.Sleep(10 * time.Second)
-
-	for i := 0; i < 3; i++ {
-		res, err = client.Call([]byte("HELLO2"))
-		fmt.Println(string(res), err)
+	lastStatDT = time.Now()
+	for j := 0; j < 60; j++ {
+		time.Sleep(20 * time.Millisecond)
+		go fn("@" + fmt.Sprint(j))
 	}
+
+	for {
+		mtx.Lock()
+		now := time.Now()
+		duration := now.Sub(lastStatDT).Seconds()
+		lastStatDT = time.Now()
+		fmt.Println("================ STAT ===============")
+		count := callCounter - lastStatCounter
+		fmt.Println("COUNT:", count)
+		fmt.Println("Speed: ", float64(count)/duration, "calls / sec")
+		lastStatCounter = callCounter
+		mtx.Unlock()
+
+		time.Sleep(1 * time.Second)
+	}
+
+	fmt.Println("clients started")
+	fmt.Scanln()
+
+	//time.Sleep(3 * time.Second)
 
 	fmt.Println("Calculator client stopped")
 }

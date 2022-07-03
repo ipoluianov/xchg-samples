@@ -30,7 +30,7 @@ func (c *Server) requestInit() error {
 			return err
 		}
 		if code != 200 {
-			fmt.Println("code:", code)
+			fmt.Println("code:", code, string(data))
 			c.reset()
 			return errors.New("code != 200")
 		}

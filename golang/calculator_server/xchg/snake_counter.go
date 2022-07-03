@@ -3,34 +3,39 @@ package xchg
 import (
 	"errors"
 	"fmt"
+	"sync"
 )
 
 type SnakeCounter struct {
-	maxCount      int
+	mtx           sync.Mutex
+	size          int
 	data          []byte
 	lastProcessed int
 }
 
-func NewSnakeCounter(maxCount int, initValue int) *SnakeCounter {
+func NewSnakeCounter(size int, initValue int) *SnakeCounter {
 	var c SnakeCounter
-	c.maxCount = maxCount
+	c.size = size
 	c.lastProcessed = -1
-	c.data = make([]byte, maxCount)
-	for i := 0; i < c.maxCount; i++ {
+	c.data = make([]byte, size)
+	for i := 0; i < c.size; i++ {
 		c.data[i] = 1
 	}
-	c.Process(initValue)
+	c.TestAndDeclare(initValue)
 	return &c
 }
 
-func (c *SnakeCounter) Process(counter int) error {
+func (c *SnakeCounter) TestAndDeclare(counter int) error {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
 	if counter < c.lastProcessed-len(c.data) {
-		return errors.New("out of limit <")
+		return errors.New("too less")
 	}
+
 	if counter > c.lastProcessed {
 		shiftRange := counter - c.lastProcessed
-		//oldHeader := c.lastProcessed
-		newData := make([]byte, c.maxCount)
+		newData := make([]byte, c.size)
 		for i := 0; i < len(c.data); i++ {
 			b := byte(0)
 			oldAddressOfCell := i - shiftRange
@@ -42,12 +47,11 @@ func (c *SnakeCounter) Process(counter int) error {
 		c.data = newData
 		c.data[0] = 1
 		c.lastProcessed = counter
-		// shift
 		return nil
 	}
 
 	index := c.lastProcessed - counter
-	if index >= 0 && index < c.maxCount {
+	if index >= 0 && index < c.size {
 
 		if c.data[index] == 0 {
 			c.data[c.lastProcessed-counter] = 1
@@ -55,7 +59,14 @@ func (c *SnakeCounter) Process(counter int) error {
 		}
 	}
 
-	return errors.New("already in use")
+	return errors.New("already used")
+}
+
+func (c *SnakeCounter) LastProcessed() int {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	return c.lastProcessed
 }
 
 func (c *SnakeCounter) Print() {

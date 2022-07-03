@@ -15,20 +15,6 @@ import (
 func main() {
 	fmt.Println("Calculator server started")
 
-	sc := xchg.NewSnakeCounter(10, 56)
-	sc.Print()
-	e := sc.Process(50)
-	fmt.Println("err:", e)
-	sc.Print()
-	e = sc.Process(57)
-	e = sc.Process(53)
-	sc.Print()
-	e = sc.Process(59)
-	fmt.Println("err:", e)
-	sc.Print()
-
-	return
-
 	var privateKey *rsa.PrivateKey
 
 	_, err := os.Stat("private_key.pem")

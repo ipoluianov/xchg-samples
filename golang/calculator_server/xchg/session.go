@@ -6,4 +6,5 @@ type Session struct {
 	id           uint64
 	aesKey       []byte
 	lastAccessDT time.Time
+	snakeCounter *SnakeCounter
 }

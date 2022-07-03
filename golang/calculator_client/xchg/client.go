@@ -42,10 +42,15 @@ type Client struct {
 	remoteServerHostingIP string
 	lid                   uint64
 	sessionId             uint64
+
+	defaultServer string
 }
 
 func NewClient(publicKey *rsa.PublicKey, authString string) *Client {
 	var c Client
+
+	//c.defaultServer = "127.0.0.1"
+	c.defaultServer = "x01.gazer.cloud"
 
 	c.publicKey = publicKey
 	c.publicKeyBS = crypt_tools.RSAPublicKeyToDer(publicKey)
@@ -69,19 +74,22 @@ func NewClient(publicKey *rsa.PublicKey, authString string) *Client {
 		c.authAESKey = addrSecretCalculated[:]
 	}
 
-	c.Reset()
+	c.reset()
 
 	return &c
 }
 
-func (c *Client) Reset() {
+func (c *Client) reset() {
+	c.mtx.Lock()
 	c.remoteServerHostingIP = ""
 	c.lid = 0
 	c.sessionId = 0xFFFFFFFFFFFFFFFF
+	c.counter = 0
+	c.mtx.Unlock()
 }
 
 func (c *Client) getIPsByAddress(_ string) []string {
-	return []string{"127.0.0.1"}
+	return []string{c.defaultServer}
 }
 
 func (c *Client) ping() (err error) {
@@ -90,9 +98,9 @@ func (c *Client) ping() (err error) {
 	frame = append(frame, c.publicKeyBS...)
 	var code int
 	var resp []byte
-	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+"127.0.0.1"+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
+	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+c.defaultServer+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
 	if code == 200 && err == nil {
-		c.remoteServerHostingIP = "127.0.0.1"
+		c.remoteServerHostingIP = c.defaultServer
 		respBS, _ := base64.StdEncoding.DecodeString(string(resp))
 		fmt.Println("respBS", respBS)
 		c.lid = binary.LittleEndian.Uint64(respBS)
@@ -100,14 +108,18 @@ func (c *Client) ping() (err error) {
 	return
 }
 
-func (c *Client) regularCall(data []byte) (resp []byte, err error) {
+func (c *Client) regularCall(data []byte, sessionCounter int) (resp []byte, err error) {
+
 	var code int
 	frame := make([]byte, 1+8+8)
 	frame[0] = 0x04
 	binary.LittleEndian.PutUint64(frame[1:], c.lid)
 	binary.LittleEndian.PutUint64(frame[9:], c.sessionId)
 	var encryptedData []byte
-	encryptedData, err = crypt_tools.EncryptAESGCM(data, c.aesKey)
+	dataForEncrypt := make([]byte, len(data)+8)
+	binary.LittleEndian.PutUint64(dataForEncrypt, uint64(sessionCounter))
+	copy(dataForEncrypt[8:], data)
+	encryptedData, err = crypt_tools.EncryptAESGCM(dataForEncrypt, c.aesKey)
 	frame = append(frame, encryptedData...)
 	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+c.remoteServerHostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
 	respBS, _ := base64.StdEncoding.DecodeString(string(resp))
@@ -120,7 +132,7 @@ func (c *Client) regularCall(data []byte) (resp []byte, err error) {
 	}
 	resp, err = crypt_tools.DecryptAESGCM(respBS, c.aesKey)
 	if err != nil {
-		c.Reset()
+		c.reset()
 	}
 	return
 }
@@ -161,8 +173,6 @@ func (c *Client) auth() (err error) {
 		return
 	}
 
-	fmt.Println("rrr", string(resp))
-
 	// Base64 -> []byte
 	respBS, err := base64.StdEncoding.DecodeString(string(resp))
 	if err != nil {
@@ -199,29 +209,38 @@ func (c *Client) auth() (err error) {
 }
 
 func (c *Client) Call(data []byte) (resp []byte, err error) {
+	sessionCounter := 0
+
+	c.mtx.Lock()
 	if len(c.remoteServerHostingIP) == 0 {
 		err = c.ping()
 		if err != nil {
 			fmt.Println("PING ERR", err)
 			c.remoteServerHostingIP = ""
+			c.mtx.Unlock()
 			return
 		}
 		err = c.auth()
 		if err != nil {
 			fmt.Println("AUTH ERR", err)
 			c.remoteServerHostingIP = ""
+			c.mtx.Unlock()
 			return
 		}
 	}
 
 	if len(c.remoteServerHostingIP) == 0 {
-		//fmt.Println("Call try ping - no")
 		err = errors.New("no route to node")
+		c.mtx.Unlock()
 		return
 	}
 
-	fmt.Println("Call executing")
-	resp, err = c.regularCall(data)
-	fmt.Println("Call executed")
+	c.counter++
+	sessionCounter = int(c.counter)
+	c.mtx.Unlock()
+
+	//fmt.Println("Call executing")
+	resp, err = c.regularCall(data, sessionCounter)
+	//fmt.Println("Call executed")
 	return
 }
