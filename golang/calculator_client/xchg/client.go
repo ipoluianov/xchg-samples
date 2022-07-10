@@ -101,9 +101,15 @@ func (c *Client) ping() (err error) {
 	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+c.defaultServer+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
 	if code == 200 && err == nil {
 		c.remoteServerHostingIP = c.defaultServer
-		respBS, _ := base64.StdEncoding.DecodeString(string(resp))
-		fmt.Println("respBS", respBS)
-		c.lid = binary.LittleEndian.Uint64(respBS)
+		var respBS []byte
+		respBS, err = base64.StdEncoding.DecodeString(string(resp))
+		if err == nil && len(respBS) > 0 {
+			if respBS[0] == 0 {
+				respBS = respBS[1:]
+				fmt.Println("respBS", respBS)
+				c.lid = binary.LittleEndian.Uint64(respBS)
+			}
+		}
 	}
 	return
 }
@@ -130,9 +136,12 @@ func (c *Client) regularCall(data []byte, sessionCounter int) (resp []byte, err 
 		err = errors.New("error code=" + fmt.Sprint(code))
 		return
 	}
-	resp, err = crypt_tools.DecryptAESGCM(respBS, c.aesKey)
-	if err != nil {
-		c.reset()
+	if len(respBS) > 0 {
+		respBS = respBS[1:]
+		resp, err = crypt_tools.DecryptAESGCM(respBS, c.aesKey)
+		if err != nil {
+			c.reset()
+		}
 	}
 	return
 }
@@ -168,7 +177,7 @@ func (c *Client) auth() (err error) {
 	frame = append(frame, encryptedAuthData...) // Data to server
 
 	// Request
-	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+c.remoteServerHostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(frame))})
+	code, resp, err = http_tools.Request(c.httpClientSend, "http://"+c.remoteServerHostingIP+":8987", map[string][]byte{"d": []byte(base64.StdEncoding.EncodeToString(frame))})
 	if err != nil {
 		return
 	}
@@ -182,6 +191,13 @@ func (c *Client) auth() (err error) {
 		err = errors.New("http error code = " + fmt.Sprint(code))
 		return
 	}
+
+	if len(respBS) < 1 {
+		err = errors.New("wrong xchgx response")
+		return
+	}
+
+	respBS = respBS[1:]
 
 	// decrypt auth result by AES key
 	var bsAuthResult []byte

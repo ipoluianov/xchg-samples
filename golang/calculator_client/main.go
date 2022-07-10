@@ -38,23 +38,27 @@ func main() {
 
 	var fn = func(th string) {
 		client := xchg.NewClient(publicKey, "main password")
+		content := make([]byte, 10*1024)
+		for i := 0; i < len(content); i++ {
+			content[i] = byte(i)
+		}
 		var res []byte
 		for i := 0; i < 10000; i++ {
 			//dt1 := time.Now()
-			res, err = client.Call([]byte("HEL23749827349872947293742974298749283733333333333333888888888888479283984729847298472987492874982739482739487239874928749287349827349872947239874923874982379823743894798LO_" + th))
+			res, err = client.Call(content)
 			_ = res
 			//dt2 := time.Now()
 			//fmt.Println(string(res), dt2.Sub(dt1).Milliseconds(), err)
 			mtx.Lock()
 			callCounter++
 			mtx.Unlock()
-			//time.Sleep(100 * time.Millisecond)
+			//time.Sleep(10 * time.Millisecond)
 		}
 	}
 
 	lastStatDT = time.Now()
-	for j := 0; j < 60; j++ {
-		time.Sleep(20 * time.Millisecond)
+	for j := 0; j < 100; j++ {
+		time.Sleep(100 * time.Millisecond)
 		go fn("@" + fmt.Sprint(j))
 	}
 

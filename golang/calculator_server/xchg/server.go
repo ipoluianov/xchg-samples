@@ -117,6 +117,7 @@ func (c *Server) Stop() {
 //  - LID
 func (c *Server) reset() {
 	fmt.Println("--- RESET ---")
+	time.Sleep(1 * time.Second)
 	c.hostingIP = ""
 	c.aesKey = nil
 	c.counter = 0
@@ -127,7 +128,10 @@ func (c *Server) findServerForHosting(publicKeyBS []byte) (resultIp string) {
 	ips := c.network.GetAddressesByPublicKey(publicKeyBS)
 	for _, ip := range ips {
 		fmt.Println("Trying", ip)
-		code, _, err := http_tools.Request(c.httpClientPing, "http://"+ip+":8987", map[string][]byte{"f": []byte("i")})
+		request := make([]byte, 1)
+		request[0] = 'i'
+		frame := base64.StdEncoding.EncodeToString(request)
+		code, _, err := http_tools.Request(c.httpClientPing, "http://"+ip+":8987", map[string][]byte{"d": []byte(frame)})
 		if err != nil {
 			continue
 		}
@@ -148,7 +152,6 @@ func (c *Server) thPugring() {
 }
 
 func (c *Server) thRcv() {
-	var code int
 	var data []byte
 	var err error
 
@@ -182,34 +185,49 @@ func (c *Server) thRcv() {
 		c.counter++
 
 		var encryptedCounter []byte
-		counterBS := make([]byte, 8)
+		counterBS := make([]byte, 16)
 		binary.LittleEndian.PutUint64(counterBS, c.counter)
+		binary.LittleEndian.PutUint32(counterBS[9:], 1000000) // TODO: max response size in bytes
 		encryptedCounter, err = crypt_tools.EncryptAESGCM(counterBS, c.aesKey)
 		if err != nil {
 			c.reset()
 			continue
 		}
 
-		readRequestBS := make([]byte, 9)
+		readRequestBS := make([]byte, 1+8)
 		readRequestBS[0] = 0x02
 		binary.LittleEndian.PutUint64(readRequestBS[1:], c.lid)
 		readRequestBS = append(readRequestBS, encryptedCounter...)
 
 		//fmt.Println("READ", c.counter)
-		code, data, err = http_tools.Request(c.httpClientReceive, "http://"+c.hostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(readRequestBS))})
+		_, data, err = http_tools.Request(c.httpClientReceive, "http://"+c.hostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(readRequestBS))})
 		if err != nil {
+			fmt.Println(err)
 			c.reset()
 			continue
 		}
 
-		if code != 200 && code != 204 {
+		dataBS, err := base64.StdEncoding.DecodeString(string(data))
+		if err != nil {
+			fmt.Println(err)
 			c.reset()
-			time.Sleep(1 * time.Second)
 			continue
 		}
 
-		if code == 200 && len(data) > 0 {
-			err = c.processFrame(data)
+		if len(dataBS) < 1 {
+			c.reset()
+			continue
+		}
+
+		if dataBS[0] != 0 {
+			c.reset()
+			continue
+		}
+
+		dataBS = dataBS[1:]
+
+		if len(dataBS) > 0 {
+			err = c.processFrames(dataBS)
 			if err != nil {
 				//c.reset()
 			}
@@ -337,23 +355,45 @@ func (c *Server) processAuth(transactionId uint64, sessionId uint64, data []byte
 }
 
 // Processing of incoming frame from XCHGX
-func (c *Server) processFrame(data []byte) (err error) {
-	data, _ = base64.StdEncoding.DecodeString(string(data))
+func (c *Server) processFrames(data []byte) (err error) {
 	data, err = crypt_tools.DecryptAESGCM(data, c.aesKey)
 	if err != nil {
 		return
 	}
-	transactionId := binary.LittleEndian.Uint64(data[0:])
-	data = data[8:]
-	sessionId := binary.LittleEndian.Uint64(data)
-	data = data[8:]
+	//fmt.Println("processFrames", len(data))
+	counter := 0
 
-	if sessionId != 0xFFFFFFFFFFFFFFFF {
-		// Regular call from remove client
-		go c.processRegularCall(transactionId, sessionId, data)
-	} else {
-		go c.processAuth(transactionId, sessionId, data)
+	originalSize := len(data)
+
+	if len(data) > 300 {
+		//fmt.Println("len(data) > 300")
 	}
+
+	for len(data) > 0 {
+		if len(data) < 12 {
+			break
+		}
+		frameSize := int(binary.LittleEndian.Uint32(data[0:]))
+		if frameSize > len(data) {
+			break
+		}
+		transactionId := binary.LittleEndian.Uint64(data[4:])
+		data = data[12:]
+		sessionId := binary.LittleEndian.Uint64(data)
+		data = data[8:]
+
+		if sessionId != 0xFFFFFFFFFFFFFFFF {
+			// Regular call from remove client
+			//fmt.Println("SessionID:", sessionId)
+			go c.processRegularCall(transactionId, sessionId, data[:frameSize-20])
+		} else {
+			go c.processAuth(transactionId, sessionId, data[:frameSize-20])
+		}
+		counter++
+		data = data[frameSize-20:]
+	}
+
+	fmt.Println("Processing frames =", counter, "size =", originalSize)
 
 	return
 }
