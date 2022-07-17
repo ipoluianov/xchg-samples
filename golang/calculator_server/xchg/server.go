@@ -41,7 +41,7 @@ type Server struct {
 	lid               uint64
 
 	// Local runtime
-	accessTokens map[string]*AccessToken
+	//accessTokens map[string]*AccessToken
 	sessionsById map[uint64]*Session
 	//sessionsByAuthData map[string]*Session
 	nextSessionId uint64
@@ -72,7 +72,7 @@ func NewServer(privateKey *rsa.PrivateKey, onRcv func(ev ServerEvent) ([]byte, e
 
 	c.sessionsById = make(map[uint64]*Session)
 	//c.sessionsByAuthData = make(map[string]*Session)
-	c.accessTokens = make(map[string]*AccessToken)
+	//c.accessTokens = make(map[string]*AccessToken)
 
 	// Prepare keys
 	c.privateKeyBS = crypt_tools.RSAPrivateKeyToDer(privateKey)
@@ -93,14 +93,14 @@ func NewServer(privateKey *rsa.PrivateKey, onRcv func(ev ServerEvent) ([]byte, e
 	c.lastPurgeSessionsTime = time.Now()
 
 	// Ready to start
-	c.reset()
+	c.fastReset()
 	return &c
 }
 
 func (c *Server) Start() {
 	networkDescription := `
-=127.0.0.1
-b8=x01.gazer.cloud
+bb=127.0.0.1
+=x01.gazer.cloud
 	`
 	c.network.Load(networkDescription)
 
@@ -116,8 +116,12 @@ func (c *Server) Stop() {
 //  - AES-key (LocalServer <-> XCHGX)
 //  - LID
 func (c *Server) reset() {
-	fmt.Println("--- RESET ---")
+	fmt.Println("RESET")
 	time.Sleep(1 * time.Second)
+	c.fastReset()
+}
+
+func (c *Server) fastReset() {
 	c.hostingIP = ""
 	c.aesKey = nil
 	c.counter = 0
@@ -129,7 +133,7 @@ func (c *Server) findServerForHosting(publicKeyBS []byte) (resultIp string) {
 	for _, ip := range ips {
 		fmt.Println("Trying", ip)
 		request := make([]byte, 1)
-		request[0] = 'i'
+		request[0] = 6
 		frame := base64.StdEncoding.EncodeToString(request)
 		code, _, err := http_tools.Request(c.httpClientPing, "http://"+ip+":8987", map[string][]byte{"d": []byte(frame)})
 		if err != nil {
@@ -200,7 +204,7 @@ func (c *Server) thRcv() {
 		readRequestBS = append(readRequestBS, encryptedCounter...)
 
 		//fmt.Println("READ", c.counter)
-		_, data, err = http_tools.Request(c.httpClientReceive, "http://"+c.hostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(readRequestBS))})
+		_, data, err = http_tools.Request(c.httpClientReceive, "http://"+c.hostingIP+":8987", map[string][]byte{"d": []byte(base64.StdEncoding.EncodeToString(readRequestBS))})
 		if err != nil {
 			fmt.Println(err)
 			c.reset()
@@ -325,6 +329,7 @@ func (c *Server) processAuth(transactionId uint64, sessionId uint64, data []byte
 		// Auth is OK
 		// Create session
 
+		c.mtx.Lock()
 		s := &Session{}
 		s.snakeCounter = NewSnakeCounter(256, 0)
 		c.nextSessionId++
@@ -333,6 +338,7 @@ func (c *Server) processAuth(transactionId uint64, sessionId uint64, data []byte
 		s.aesKey = sessionAesKey[:]
 		s.lastAccessDT = time.Now()
 		c.sessionsById[s.id] = s
+		c.mtx.Unlock()
 
 		binary.LittleEndian.PutUint64(authResponseBS, s.id)
 		copy(authResponseBS[8:], s.aesKey)
@@ -360,14 +366,9 @@ func (c *Server) processFrames(data []byte) (err error) {
 	if err != nil {
 		return
 	}
-	//fmt.Println("processFrames", len(data))
 	counter := 0
 
 	originalSize := len(data)
-
-	if len(data) > 300 {
-		//fmt.Println("len(data) > 300")
-	}
 
 	for len(data) > 0 {
 		if len(data) < 12 {
@@ -415,12 +416,13 @@ func (c *Server) sendResponse(transactionId uint64, response []byte) {
 	}
 
 	putRequestBS = append(putRequestBS, encryptedResponse...)
-	_, _, err = http_tools.Request(c.httpClientReceive, "http://"+c.hostingIP+":8987", map[string][]byte{"f": []byte("b"), "d": []byte(base64.StdEncoding.EncodeToString(putRequestBS))})
+	_, _, err = http_tools.Request(c.httpClientReceive, "http://"+c.hostingIP+":8987", map[string][]byte{"d": []byte(base64.StdEncoding.EncodeToString(putRequestBS))})
 }
 
 func (c *Server) purgeSessions() {
 	now := time.Now()
-	if now.Sub(c.lastPurgeSessionsTime).Seconds() > 60 {
+	c.mtx.Lock()
+	if now.Sub(c.lastPurgeSessionsTime).Seconds() > 5*60 {
 		fmt.Println("Purging sessions")
 		for sessionId, session := range c.sessionsById {
 			if now.Sub(session.lastAccessDT).Seconds() > 30 {
@@ -430,4 +432,5 @@ func (c *Server) purgeSessions() {
 		}
 		c.lastPurgeSessionsTime = time.Now()
 	}
+	c.mtx.Unlock()
 }

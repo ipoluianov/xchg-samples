@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -38,7 +39,7 @@ func main() {
 
 	var fn = func(th string) {
 		client := xchg.NewClient(publicKey, "main password")
-		content := make([]byte, 10*1024)
+		content := make([]byte, 1*1024)
 		for i := 0; i < len(content); i++ {
 			content[i] = byte(i)
 		}
@@ -46,19 +47,22 @@ func main() {
 		for i := 0; i < 10000; i++ {
 			//dt1 := time.Now()
 			res, err = client.Call(content)
+			if err != nil {
+				fmt.Println("ERROR:", err)
+			}
 			_ = res
 			//dt2 := time.Now()
-			//fmt.Println(string(res), dt2.Sub(dt1).Milliseconds(), err)
+			//fmt.Println(">", string(res), dt2.Sub(dt1).Milliseconds(), err)
 			mtx.Lock()
 			callCounter++
 			mtx.Unlock()
-			//time.Sleep(10 * time.Millisecond)
+			//time.Sleep(100 * time.Millisecond)
 		}
 	}
 
 	lastStatDT = time.Now()
 	for j := 0; j < 100; j++ {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(time.Duration((rand.Int()%10)+300) * time.Millisecond)
 		go fn("@" + fmt.Sprint(j))
 	}
 
