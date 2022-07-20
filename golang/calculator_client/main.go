@@ -39,7 +39,7 @@ func main() {
 
 	var fn = func(th string) {
 		client := xchg.NewClient(publicKey, "main password")
-		content := make([]byte, 1*1024)
+		content := make([]byte, 1024*1)
 		for i := 0; i < len(content); i++ {
 			content[i] = byte(i)
 		}
@@ -56,14 +56,16 @@ func main() {
 			mtx.Lock()
 			callCounter++
 			mtx.Unlock()
-			//time.Sleep(100 * time.Millisecond)
+			//time.Sleep(1 * time.Millisecond)
 		}
+		fmt.Println("//Complete//")
 	}
 
 	lastStatDT = time.Now()
-	for j := 0; j < 100; j++ {
-		time.Sleep(time.Duration((rand.Int()%10)+300) * time.Millisecond)
+	for j := 0; j < 300; j++ {
+		time.Sleep(time.Duration((rand.Int()%10)+20) * time.Millisecond)
 		go fn("@" + fmt.Sprint(j))
+		fmt.Println("created", j)
 	}
 
 	for {

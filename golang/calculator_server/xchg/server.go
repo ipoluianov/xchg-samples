@@ -18,6 +18,7 @@ import (
 
 type Server struct {
 	mtx        sync.Mutex
+	started    bool
 	stopping   bool
 	onReceived func(ev ServerEvent) ([]byte, error)
 
@@ -34,16 +35,14 @@ type Server struct {
 
 	// Connection [ThisNode]<->[XchgHost]
 	httpClientReceive *http.Client
-	httpClientPing    *http.Client
-	hostingIP         string
-	aesKey            []byte
-	counter           uint64
-	lid               uint64
 
 	// Local runtime
-	//accessTokens map[string]*AccessToken
-	sessionsById map[uint64]*Session
-	//sessionsByAuthData map[string]*Session
+	hostingIP string
+	aesKey    []byte
+	counter   uint64
+	lid       uint64
+
+	sessionsById  map[uint64]*Session
 	nextSessionId uint64
 
 	lastPurgeSessionsTime time.Time
@@ -71,8 +70,6 @@ func NewServer(privateKey *rsa.PrivateKey, onRcv func(ev ServerEvent) ([]byte, e
 	c.network = NewNetwork()
 
 	c.sessionsById = make(map[uint64]*Session)
-	//c.sessionsByAuthData = make(map[string]*Session)
-	//c.accessTokens = make(map[string]*AccessToken)
 
 	// Prepare keys
 	c.privateKeyBS = crypt_tools.RSAPrivateKeyToDer(privateKey)
@@ -84,11 +81,7 @@ func NewServer(privateKey *rsa.PrivateKey, onRcv func(ev ServerEvent) ([]byte, e
 
 	// Prepare HTTP-client
 	c.httpClientReceive = &http.Client{}
-	c.httpClientReceive.Timeout = 60000 * time.Millisecond
-
-	// Prepare HTTP-client for Ping
-	c.httpClientPing = &http.Client{}
-	c.httpClientPing.Timeout = 2000 * time.Millisecond
+	c.httpClientReceive.Timeout = 20 * time.Second
 
 	c.lastPurgeSessionsTime = time.Now()
 
@@ -98,6 +91,13 @@ func NewServer(privateKey *rsa.PrivateKey, onRcv func(ev ServerEvent) ([]byte, e
 }
 
 func (c *Server) Start() {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	if c.started {
+		return
+	}
+
 	networkDescription := `
 bb=127.0.0.1
 =x01.gazer.cloud
@@ -106,9 +106,20 @@ bb=127.0.0.1
 
 	go c.thRcv()
 	go c.thPugring()
+	c.started = true
 }
 
 func (c *Server) Stop() {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	if !c.started || c.stopping {
+		return
+	}
+	c.stopping = true
+	dtStopBegin := time.Now()
+	for time.Now().Sub(dtStopBegin).Milliseconds() < 500 && c.started {
+		time.Sleep(10)
+	}
 }
 
 // Reset runtime state
@@ -116,16 +127,17 @@ func (c *Server) Stop() {
 //  - AES-key (LocalServer <-> XCHGX)
 //  - LID
 func (c *Server) reset() {
-	fmt.Println("RESET")
-	time.Sleep(1 * time.Second)
+	c.waitDurationOrStopping(500 * time.Millisecond)
 	c.fastReset()
 }
 
 func (c *Server) fastReset() {
+	c.mtx.Lock()
 	c.hostingIP = ""
 	c.aesKey = nil
 	c.counter = 0
 	c.lid = 0
+	c.mtx.Unlock()
 }
 
 func (c *Server) findServerForHosting(publicKeyBS []byte) (resultIp string) {
@@ -134,29 +146,58 @@ func (c *Server) findServerForHosting(publicKeyBS []byte) (resultIp string) {
 		fmt.Println("Trying", ip)
 		request := make([]byte, 1)
 		request[0] = 6
-		frame := base64.StdEncoding.EncodeToString(request)
-		code, _, err := http_tools.Request(c.httpClientPing, "http://"+ip+":8987", map[string][]byte{"d": []byte(frame)})
+		_, err := c.Request(ip, request, 1000*time.Millisecond)
 		if err != nil {
 			continue
 		}
-		if code == 200 {
-			resultIp = ip
-			break
-		}
+		resultIp = ip
 	}
-	fmt.Println("HOSTRING IP", resultIp)
 	return
 }
 
 func (c *Server) thPugring() {
 	for !c.stopping {
 		c.purgeSessions()
-		time.Sleep(1 * time.Second)
+		c.waitDurationOrStopping(1000 * time.Millisecond)
+	}
+}
+
+func (c *Server) Request(host string, frameData []byte, timeout time.Duration) (result []byte, err error) {
+	if true {
+		result, err = GetBinClient(host).Request(frameData, timeout)
+	} else {
+		_, result, err = http_tools.Request(c.httpClientReceive, "http://"+host+":8987", map[string][]byte{"d": []byte(base64.StdEncoding.EncodeToString(frameData))})
+		if err == nil {
+			result, err = base64.StdEncoding.DecodeString(string(result))
+			if err != nil {
+				result = nil
+				return
+			}
+			if len(result) < 1 {
+				err = errors.New("wrong frame < 1")
+				result = nil
+				return
+			}
+			if result[0] != 0 {
+				err = errors.New(string(result[1:]))
+				result = nil
+				return
+			}
+			result = result[1:]
+		}
+	}
+
+	return
+}
+
+func (c *Server) waitDurationOrStopping(duration time.Duration) {
+	dtBegin := time.Now()
+	for time.Now().Sub(dtBegin).Milliseconds() < duration.Milliseconds() && !c.stopping {
+		time.Sleep(100)
 	}
 }
 
 func (c *Server) thRcv() {
-	var data []byte
 	var err error
 
 	for !c.stopping {
@@ -166,7 +207,7 @@ func (c *Server) thRcv() {
 			c.hostingIP = c.findServerForHosting(c.publicKeyBS)
 		}
 		if c.hostingIP == "" {
-			time.Sleep(1 * time.Second)
+			c.waitDurationOrStopping(1 * time.Second)
 			c.reset()
 			continue
 		}
@@ -175,13 +216,13 @@ func (c *Server) thRcv() {
 		if len(c.aesKey) != 32 {
 			err = c.requestInit()
 			if err != nil {
-				time.Sleep(1 * time.Second)
+				c.waitDurationOrStopping(1 * time.Second)
 				c.reset()
 				continue
 			}
 		}
 		if len(c.aesKey) != 32 {
-			time.Sleep(1 * time.Second)
+			c.waitDurationOrStopping(1 * time.Second)
 			c.reset()
 			continue
 		}
@@ -189,9 +230,9 @@ func (c *Server) thRcv() {
 		c.counter++
 
 		var encryptedCounter []byte
-		counterBS := make([]byte, 16)
+		counterBS := make([]byte, 12)
 		binary.LittleEndian.PutUint64(counterBS, c.counter)
-		binary.LittleEndian.PutUint32(counterBS[9:], 1000000) // TODO: max response size in bytes
+		binary.LittleEndian.PutUint32(counterBS[8:], 1024*1024)
 		encryptedCounter, err = crypt_tools.EncryptAESGCM(counterBS, c.aesKey)
 		if err != nil {
 			c.reset()
@@ -203,38 +244,15 @@ func (c *Server) thRcv() {
 		binary.LittleEndian.PutUint64(readRequestBS[1:], c.lid)
 		readRequestBS = append(readRequestBS, encryptedCounter...)
 
-		//fmt.Println("READ", c.counter)
-		_, data, err = http_tools.Request(c.httpClientReceive, "http://"+c.hostingIP+":8987", map[string][]byte{"d": []byte(base64.StdEncoding.EncodeToString(readRequestBS))})
+		var dataBS []byte
+		dataBS, err = c.Request(c.hostingIP, readRequestBS, 60*time.Second)
 		if err != nil {
-			fmt.Println(err)
 			c.reset()
 			continue
 		}
-
-		dataBS, err := base64.StdEncoding.DecodeString(string(data))
-		if err != nil {
-			fmt.Println(err)
-			c.reset()
-			continue
-		}
-
-		if len(dataBS) < 1 {
-			c.reset()
-			continue
-		}
-
-		if dataBS[0] != 0 {
-			c.reset()
-			continue
-		}
-
-		dataBS = dataBS[1:]
 
 		if len(dataBS) > 0 {
-			err = c.processFrames(dataBS)
-			if err != nil {
-				//c.reset()
-			}
+			go c.processFrames(dataBS)
 		}
 	}
 }
@@ -243,8 +261,11 @@ func (c *Server) processRegularCall(transactionId uint64, sessionId uint64, data
 	var err error
 	var response []byte
 
-	//fmt.Println("Session id received:", sessionId)
-	if session, ok := c.sessionsById[sessionId]; ok {
+	c.mtx.Lock()
+	session, ok := c.sessionsById[sessionId]
+	c.mtx.Unlock()
+
+	if ok {
 		var ev ServerEvent
 		ev.Type = ServerEventFrame
 		var decryptedData []byte
@@ -254,7 +275,6 @@ func (c *Server) processRegularCall(transactionId uint64, sessionId uint64, data
 				sessionCounter := binary.LittleEndian.Uint64(decryptedData)
 				err = session.snakeCounter.TestAndDeclare(int(sessionCounter))
 				if err == nil {
-					//fmt.Println("Session Counter =", sessionCounter)
 					ev.Data = decryptedData[8:]
 					var frameResponse []byte
 					frameResponse, err = c.onReceived(ev)
@@ -284,8 +304,6 @@ func (c *Server) processRegularCall(transactionId uint64, sessionId uint64, data
 func (c *Server) processAuth(transactionId uint64, sessionId uint64, data []byte) {
 	response := make([]byte, 0)
 	var err error
-
-	fmt.Println("Session id received (-1):", sessionId)
 
 	// Received Init Frame
 	// Decrypt by local PrivateKey
@@ -416,7 +434,7 @@ func (c *Server) sendResponse(transactionId uint64, response []byte) {
 	}
 
 	putRequestBS = append(putRequestBS, encryptedResponse...)
-	_, _, err = http_tools.Request(c.httpClientReceive, "http://"+c.hostingIP+":8987", map[string][]byte{"d": []byte(base64.StdEncoding.EncodeToString(putRequestBS))})
+	c.Request(c.hostingIP, putRequestBS, 1*time.Second)
 }
 
 func (c *Server) purgeSessions() {
