@@ -80,6 +80,10 @@ func (c *BinClient) thReceive() {
 			c.conn = nil
 			continue
 		}
+		if n == 77 {
+			fmt.Println("received", n, "bytes")
+		}
+
 		incomingDataOffset += n
 		processedLen := 0
 		for {
@@ -156,6 +160,7 @@ func (c *BinClient) setResponse(transactionId int32, frameData []byte) {
 		transaction.Err = errors.New(string(frameData[1:]))
 	} else {
 		transaction.Response = frameData[1:]
+		//fmt.Println("Transaction OK", transaction.TransactionId)
 	}
 	transaction.Complete = true
 }
@@ -219,7 +224,7 @@ func (c *BinClient) Request(frameData []byte) (result []byte, err error) {
 	// Wait for response
 	timeout := 3 * time.Second
 	waitingDurationInMilliseconds := timeout.Milliseconds()
-	waitingTick := int64(20)
+	waitingTick := int64(1)
 	waitingIterationCount := waitingDurationInMilliseconds / waitingTick
 	for i := int64(0); i < waitingIterationCount; i++ {
 		if transaction.Complete {

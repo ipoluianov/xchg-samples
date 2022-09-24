@@ -35,6 +35,8 @@ type BinClient struct {
 	transactions      map[int32]*BinClientTransaction
 	nextTransactionId int32
 	maxFrameSize      int
+
+	srv *Server
 }
 
 type BinClientTransaction struct {
@@ -136,12 +138,18 @@ func (c *BinClient) thReceive() {
 			}
 
 			transaction := int32(signature >> 8)
+			//fmt.Println("RCV:", signature)
 
 			frame := make([]byte, frameLen-8)
 			copy(frame, incomingData[processedLen+8:processedLen+frameLen])
 			processedLen += frameLen
 
-			c.setResponse(transaction, frame)
+			if transaction == 0 {
+				//fmt.Println("----------------------------------->>>>>>>>>>>>>>", frame)
+				c.srv.processFrames(frame[1:])
+			} else {
+				c.setResponse(transaction, frame)
+			}
 		}
 
 		if err != nil {

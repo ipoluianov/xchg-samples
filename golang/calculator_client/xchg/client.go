@@ -128,6 +128,7 @@ func (c *Client) Request(host string, frameData []byte) (result []byte, err erro
 }
 
 func (c *Client) ping() (err error) {
+	fmt.Println("Ping ...")
 	frame := make([]byte, 1)
 	frame[0] = 0x05
 	frame = append(frame, c.publicKeyBS...)
@@ -177,6 +178,7 @@ func (c *Client) regularCall(data []byte, sessionCounter int) (resp []byte, err 
 }
 
 func (c *Client) auth() (err error) {
+	fmt.Println("AUTH ...")
 	if len(c.authAESKey) != 32 {
 		err = errors.New("no auth AES key")
 		return

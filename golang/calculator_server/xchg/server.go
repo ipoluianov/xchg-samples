@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/ipoluianov/gomisc/crypt_tools"
-	"github.com/ipoluianov/gomisc/http_tools"
 )
 
 type Server struct {
@@ -99,8 +97,8 @@ func (c *Server) Start() {
 	}
 
 	networkDescription := `
-bb=127.0.0.1
-=x01.gazer.cloud
+=127.0.0.1
+bb=x01.gazer.cloud
 	`
 	c.network.Load(networkDescription)
 
@@ -163,30 +161,8 @@ func (c *Server) thPugring() {
 }
 
 func (c *Server) Request(host string, frameData []byte, timeout time.Duration) (result []byte, err error) {
-	if true {
-		result, err = GetBinClient(host).Request(frameData, timeout)
-	} else {
-		_, result, err = http_tools.Request(c.httpClientReceive, "http://"+host+":8987", map[string][]byte{"d": []byte(base64.StdEncoding.EncodeToString(frameData))})
-		if err == nil {
-			result, err = base64.StdEncoding.DecodeString(string(result))
-			if err != nil {
-				result = nil
-				return
-			}
-			if len(result) < 1 {
-				err = errors.New("wrong frame < 1")
-				result = nil
-				return
-			}
-			if result[0] != 0 {
-				err = errors.New(string(result[1:]))
-				result = nil
-				return
-			}
-			result = result[1:]
-		}
-	}
-
+	GetBinClient(host).srv = c
+	result, err = GetBinClient(host).Request(frameData, timeout)
 	return
 }
 
@@ -226,6 +202,8 @@ func (c *Server) thRcv() {
 			c.reset()
 			continue
 		}
+
+		time.Sleep(1 * time.Second)
 
 		c.counter++
 
@@ -380,13 +358,13 @@ func (c *Server) processAuth(transactionId uint64, sessionId uint64, data []byte
 
 // Processing of incoming frame from XCHGX
 func (c *Server) processFrames(data []byte) (err error) {
-	data, err = crypt_tools.DecryptAESGCM(data, c.aesKey)
+	/*data, err = crypt_tools.DecryptAESGCM(data, c.aesKey)
 	if err != nil {
 		return
-	}
+	}*/
 	counter := 0
 
-	originalSize := len(data)
+	//originalSize := len(data)
 
 	for len(data) > 0 {
 		if len(data) < 12 {
@@ -396,6 +374,7 @@ func (c *Server) processFrames(data []byte) (err error) {
 		if frameSize > len(data) {
 			break
 		}
+
 		transactionId := binary.LittleEndian.Uint64(data[4:])
 		data = data[12:]
 		sessionId := binary.LittleEndian.Uint64(data)
@@ -412,7 +391,7 @@ func (c *Server) processFrames(data []byte) (err error) {
 		data = data[frameSize-20:]
 	}
 
-	fmt.Println("Processing frames =", counter, "size =", originalSize)
+	//fmt.Println("Processing frames =", counter, "size =", originalSize)
 
 	return
 }
